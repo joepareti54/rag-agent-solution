@@ -1,0 +1,5 @@
+convert the application described in this subdirectory to an AI Agentic application:
+- manager agent: allocates tasks to workers, collect outputs and prepares consolidated response to user
+- worker agent A does the same job as the code described in 'Technical Guide_ Building a Serverless RAG System on AWS with FAISS and Bedrock (7).pdf' and https://github.com/joepareti54/aws-cdk-rag-solution-0 
+- worker agent B processes the same query using another LLM, but without access to the dataset used by A
+- (possible expansion: agent C queries live financial market data for stock prices, market news, commodities, currencies, etc)
