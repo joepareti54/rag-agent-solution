@@ -26,7 +26,7 @@ Full architecture, component breakdown, and rationale: **[PLAN.md](PLAN.md)**.
 |---|---|
 | [`PLAN.md`](PLAN.md) | Architecture and design decisions. |
 | `specs.txt` | Original requirements. |
-| `Technical Guide … .pdf` | Reference for the underlying RAG infrastructure. |
+| `Technical Guide_ Building a Serverless RAG System on AWS with FAISS and Bedrock (7).pdf` | Reference for the underlying RAG infrastructure. |
 
 ## Stack
 
