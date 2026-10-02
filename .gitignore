@@ -61,3 +61,5 @@ Thumbs.db
 data/raw/
 data/processed/
 do_git_*
+PLAN.md.old
+do_chech_src

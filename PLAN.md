@@ -56,6 +56,15 @@ The Worker Lambda runs the manager agent (built on smolagents) as a continuous r
 
 **Lambda + API Gateway + DynamoDB.** Serverless, low idle cost, appropriate for portfolio-grade on-demand workloads. DynamoDB holds job state (PENDING / RUNNING / COMPLETED / FAILED) and the final answer. CDK is used for infrastructure-as-code.
 
+**Python 3.12, x86_64 — pinned end-to-end.** Chosen because (a) it runs on Amazon Linux 2023 with Lambda deprecation not until October 2028, giving a comfortable runway; (b) all likely dependencies (`boto3`, `anthropic`, `smolagents`, plus any compiled packages inherited from the RAG project such as `numpy`, `pydantic-core`, `tiktoken`) have stable manylinux `cp312` wheels; (c) 3.13's JIT and free-threading are disabled in the Lambda build, so there is no upside to moving newer, and marginal risk from less-mature wheel availability. The version and architecture are pinned identically in four places to prevent local/Lambda drift:
+
+- `.python-version` → `3.12`
+- `pyproject.toml` → `requires-python = ">=3.12,<3.13"`
+- CDK Lambda config → `runtime=lambda.Runtime.PYTHON_3_12, architecture=Architecture.X86_64`
+- Deployment package build → performed inside `public.ecr.aws/lambda/python:3.12` (or Lambda container image) whenever compiled C/Rust extensions are involved, so `.so` files are ABI-compatible with the Lambda runtime.
+
+Rationale for pinning in four places : the previous RAG project produced a `Runtime.ImportModuleError: No module named 'numpy.core._multiarray_umath'` at Lambda cold start caused by a version/architecture mismatch between the local `pip install` environment and the Lambda runtime. Pinning across all four surfaces converts that class of failure into a compile-time or install-time error rather than a deployment-time crash. If a future dependency forces a version change, the pin is edited in these four places and nowhere else.
+
 ## 4. Component Breakdown
 
 **Manager agent** — smolagents-based, system prompt describes the two workers and their strengths, runs an autonomous think-act-observe loop until it produces a final answer. Pure Python module (`manager.py`) with no Lambda-specific dependencies.
@@ -93,7 +102,20 @@ For each, verify: final answer quality, the reasoning trace in the logs shows se
 
 ## 7. Risks and Open Questions
 
-**Lambda 15-minute timeout.** The existing end-to-end run is ~17 minutes, which exceeds the limit. The plan is to address this via optimization, not architectural decomposition. A pre-defined multi-step Lambda chain is explicitly rejected: it would relocate orchestration logic from the LLM into infrastructure, undermining the project's autonomy thesis. Optimization steps: (1) profile the current run to identify bottlenecks; (2) parallelize independent worker calls (currently sequential); (3) tighten the manager prompt to reduce unnecessary reasoning turns. Target: under 12 minutes wall-clock with tail-latency headroom. Fallback if optimization is insufficient: migrate the Worker Lambda to ECS Fargate (no 15-minute limit) — deferred decision, not pre-committed.
+**Lambda 15-minute timeout.** The existing end-to-end run is ~17 minutes, which exceeds the limit. The plan is to address this via optimization, not architectural decomposition. A pre-defined multi-step Lambda chain is explicitly rejected: it would relocate orchestration logic from the LLM into infrastructure, undermining the project's autonomy thesis.
+
+Optimization levers, in order of preference:
+
+1. **Profile the current run** to identify bottlenecks (per-step timings, worker latency, Anthropic response time, framework overhead).
+2. **Tighten the manager prompt** to reduce unnecessary reasoning turns and redundant worker calls. Prompt engineering is the highest-leverage lever because manager decisions drive everything downstream.
+3. **Reduce per-step overhead** in the worker wrappers: retry policies, request/response payload sizes, per-call timeouts, connection reuse (boto3 client caching, HTTP keep-alive to the RAG endpoint).
+4. **Trim the RAG worker's own runtime** if profiling shows it dominates (retrieval-side optimization inside Worker A).
+
+Target: under 12 minutes wall-clock with tail-latency headroom.
+
+**Parallelizing worker calls is explicitly not on this list.** Whether Worker A and Worker B are invoked concurrently is a decision that belongs to the manager, not to the infrastructure. Baking parallelism into the tool wrappers or the Lambda code would relocate a routing decision out of the LLM — the same anti-pattern as the pre-defined Lambda chain rejected above, just at a smaller scale. If the manager chooses to issue concurrent tool calls and the agent framework supports it, that behavior is emergent and welcome; it will not be forced by the surrounding code.
+
+Fallback if optimization is insufficient: migrate the Worker Lambda to ECS Fargate (no 15-minute limit) — deferred decision, not pre-committed.
 
 **Tail latency near the ceiling.** Even with optimization, a slow Anthropic response or an unlucky manager reasoning trajectory could push runtime up. Mitigation: log per-step timings, set internal timeouts on individual worker calls, surface near-limit runs as warnings.
 
@@ -112,3 +134,4 @@ For each, verify: final answer quality, the reasoning trace in the logs shows se
 - No Strands features (dynamic prompts, sub-agent spawning, self-modification, persistent behavioral changes).
 - No local LLM hosting; all model inference is via managed APIs.
 - No Step Functions or multi-Lambda orchestration; the manager's reasoning loop is the orchestration.
+- No infrastructure-imposed parallelism across worker calls; concurrency, if it happens, is a manager decision.
